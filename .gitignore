@@ -5,6 +5,7 @@
 # Generated outputs
 output/
 cache/
+runs/
 
 # Python
 __pycache__/
