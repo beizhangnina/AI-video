@@ -9,12 +9,32 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from .. import assets as assets_mod
 from .. import runs as run_paths
 from ..agents import executor, planner
 from ..agents.schemas import Plan, RunResult
 from ..compose import kenburns, render, stitch, subtitles
 from ..config import settings
 from ..generate import tts
+
+
+def _resolve_portrait(portrait: str | None) -> str | None:
+    """Accept either an asset:// URI or a local image path.
+
+    If a local path is provided, upload it to a Virtual Portrait group (no
+    real-person verification needed) and return the resulting asset:// URI.
+    Returns None if portrait is None.
+    """
+    if not portrait:
+        return None
+    if portrait.startswith("asset://"):
+        return portrait
+    p = Path(portrait)
+    if p.exists() and p.is_file():
+        print(f"[auto] uploading portrait {p.name} to Virtual Portrait group…")
+        uris = assets_mod.setup_virtual_portrait(f"aivideo-portrait-{p.stem}", [p])
+        return uris[0]
+    return portrait
 
 
 def _aspect_to_size(aspect: str) -> tuple[int, int]:
@@ -75,12 +95,13 @@ def make(
           f"| {plan_obj.style.duration_target}s | aspect={plan_obj.style.aspect}")
 
     width, height = _aspect_to_size(plan_obj.style.aspect)
+    resolved_portrait = _resolve_portrait(portrait)
 
     reports, flagged = executor.execute(
         plan_obj,
         run_dir,
         motion=motion,
-        portrait=portrait,
+        portrait=resolved_portrait,
         qc_enabled=qc_enabled,
     )
 
