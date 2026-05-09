@@ -1,6 +1,7 @@
 """Burn subtitles onto a video clip.
 
 Renders text via Pillow (avoids ImageMagick dependency that moviepy.TextClip needs).
+Targets moviepy 2.x.
 """
 
 from __future__ import annotations
@@ -9,8 +10,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
-from moviepy.video.VideoClip import ImageClip, VideoClip
-from moviepy.video.compositing.CompositeVideoClip import CompositeVideoClip
+from moviepy import CompositeVideoClip, ImageClip, VideoClip
 from PIL import Image, ImageDraw, ImageFont
 
 
@@ -82,10 +82,10 @@ def burn(
     for cue in cues:
         img = _render_text(cue.text, width=width - 80, font=font)
         clip = (
-            ImageClip(np.array(img))
-            .set_start(cue.start)
-            .set_end(cue.end)
-            .set_position(("center", height - img.size[1] - int(height * bottom_margin_ratio)))
+            ImageClip(np.array(img), transparent=True)
+            .with_start(cue.start)
+            .with_end(cue.end)
+            .with_position(("center", height - img.size[1] - int(height * bottom_margin_ratio)))
         )
         overlays.append(clip)
     return CompositeVideoClip(overlays, size=base.size)

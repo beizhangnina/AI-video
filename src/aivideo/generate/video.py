@@ -23,7 +23,7 @@ import httpx
 
 from .. import assets
 from ..cache import cache_path, hit
-from ..client import http_client, openai_client
+from ..client import http_client
 from ..config import settings
 
 ALLOWED_DURATIONS = {3, 4, 5, 6, 7, 8, 9, 10, 12}
@@ -90,9 +90,13 @@ def _submit_and_wait(
     if callback_url:
         payload = {**payload, "callback_url": callback_url, "request_id": cache_params.get("rid")}
 
-    # Use OpenAI SDK's raw post() so the path is /videos under the configured base_url.
-    resp = openai_client().post("/videos", body=payload, cast_to=object)
-    task_id = resp.get("id") or resp.get("task_id") or resp["data"]["id"]
+    # /v1/videos is Token360-specific; not part of OpenAI SDK surface.
+    r = http_client().post("/videos", json=payload)
+    r.raise_for_status()
+    resp = r.json()
+    task_id = resp.get("id") or resp.get("task_id") or resp.get("data", {}).get("id")
+    if not task_id:
+        raise RuntimeError(f"No task id in /videos response: {resp}")
 
     if callback_url:
         # User opted into webhook delivery; don't poll. Return a placeholder path
@@ -249,7 +253,9 @@ def native(body: dict, *, callback_url: str | None = None) -> Path:
     )
     r.raise_for_status()
     resp = r.json()
-    task_id = resp.get("id") or resp.get("task_id") or resp["data"]["id"]
+    task_id = resp.get("id") or resp.get("task_id") or resp.get("data", {}).get("id")
+    if not task_id:
+        raise RuntimeError(f"No task id in /videos response: {resp}")
     if callback_url:
         path.write_bytes(b"")
         return path

@@ -7,7 +7,6 @@ plus a human-readable runs/<id>/report.md.
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 from .. import runs as run_paths

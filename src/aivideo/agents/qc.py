@@ -11,8 +11,12 @@ with image_url content parts.
 from __future__ import annotations
 
 import base64
+import io
 import json
 from pathlib import Path
+
+from moviepy import VideoFileClip
+from PIL import Image
 
 from ..client import openai_client
 from ..config import settings
@@ -124,10 +128,6 @@ def _ask(intent: str, image_data_url: str, *, model: str | None) -> dict:
 
 
 def _extract_mid_frame_b64(video_path: Path) -> str:
-    from moviepy.video.io.VideoFileClip import VideoFileClip
-    from PIL import Image
-    import io
-
     with VideoFileClip(str(video_path)) as clip:
         frame = clip.get_frame(clip.duration / 2)
     img = Image.fromarray(frame)

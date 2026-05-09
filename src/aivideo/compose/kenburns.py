@@ -1,13 +1,18 @@
-"""Ken Burns effect: slow zoom/pan over a still image to fake motion.
+"""Ken Burns effect: slow zoom over a still image to fake motion.
 
-Used as the fallback when video generation is disabled (motion="kenburns").
+Implementation: pre-resize the image to cover the output box, then for each
+frame compute a centered crop window scaled by an animated zoom factor and
+upscale back to (width x height). Pure numpy + Pillow + moviepy VideoClip,
+which avoids moviepy's effect-pipeline API churn.
 """
 
 from __future__ import annotations
 
 from pathlib import Path
 
-from moviepy.video.VideoClip import ImageClip, VideoClip
+import numpy as np
+from moviepy import VideoClip
+from PIL import Image
 
 from ..config import settings
 
@@ -28,29 +33,29 @@ def from_image(
     width = width or settings.width
     height = height or settings.height
 
-    base = ImageClip(str(image_path)).set_duration(duration)
-    bw, bh = base.size
+    pil = Image.open(str(image_path)).convert("RGB")
+    iw, ih = pil.size
     target_ratio = width / height
-    src_ratio = bw / bh
+    src_ratio = iw / ih
     if src_ratio > target_ratio:
-        new_h = height
-        new_w = int(round(new_h * src_ratio))
+        cover_h = height
+        cover_w = int(round(cover_h * src_ratio))
     else:
-        new_w = width
-        new_h = int(round(new_w / src_ratio))
-    base = base.resize(newsize=(new_w, new_h))
+        cover_w = width
+        cover_h = int(round(cover_w / src_ratio))
+    pil = pil.resize((cover_w, cover_h), Image.LANCZOS)
+    base = np.array(pil)
 
-    def zoom(t: float) -> float:
-        progress = t / duration if duration else 0
-        return zoom_from + (zoom_to - zoom_from) * progress
+    def make_frame(t: float) -> np.ndarray:
+        progress = (t / duration) if duration else 0.0
+        zoom = zoom_from + (zoom_to - zoom_from) * progress
+        crop_w = max(1, min(cover_w, int(round(width / zoom))))
+        crop_h = max(1, min(cover_h, int(round(height / zoom))))
+        x = (cover_w - crop_w) // 2
+        y = (cover_h - crop_h) // 2
+        cropped = base[y:y + crop_h, x:x + crop_w]
+        return np.array(
+            Image.fromarray(cropped).resize((width, height), Image.LANCZOS)
+        )
 
-    zoomed = base.resize(lambda t: zoom(t))
-
-    def crop_center(get_frame, t):
-        frame = get_frame(t)
-        h, w = frame.shape[:2]
-        x = max(0, (w - width) // 2)
-        y = max(0, (h - height) // 2)
-        return frame[y:y + height, x:x + width]
-
-    return zoomed.fl(crop_center, apply_to=["mask"]).set_duration(duration)
+    return VideoClip(make_frame, duration=duration)

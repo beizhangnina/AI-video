@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from moviepy.video.VideoClip import VideoClip
+from moviepy import VideoClip
 
 from ..config import OUTPUT_DIR, settings
 
