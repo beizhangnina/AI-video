@@ -74,7 +74,33 @@ That single command:
 Re-running the same idea string is cheap: every Token360 call is content-hashed
 and cached under `cache/`.
 
-### Common flags
+### Presets — fight choice fatigue
+
+Pass any of `--style / --duration / --aspect / --mood / --voice / --pacing`
+with a preset slug, and the planner will honor it as a hard constraint. Each
+preset accepts either a slug or a raw user-supplied descriptor (so power users
+aren't trapped):
+
+```bash
+aivideo make "a cat learns to surf" --style ghibli --duration short --mood cheerful
+
+aivideo make "a midnight ramen shop" --style cyberpunk --voice deep --pacing slow
+
+aivideo make "侠客江湖归来" --style wuxia --aspect vertical --voice dramatic
+```
+
+Run `aivideo styles` to see every preset slug and what it expands to.
+
+| Flag | Slugs |
+|---|---|
+| `--style` | `cyberpunk` · `ghibli` · `pixar_3d` · `photorealistic` · `wuxia` · `cinematic` · `anime` · `cartoon_2d` · `noir` · `watercolor` |
+| `--duration` | `snippet` (15s) · `short` (30s) · `standard` (45s) · `long_form` (75s) — or a raw integer |
+| `--aspect` | `vertical` (9:16) · `horizontal` (16:9) · `square` (1:1) |
+| `--mood` | `cheerful` · `melancholic` · `mysterious` · `epic` · `comedic` · `romantic` · `suspenseful` · `serene` |
+| `--voice` | `warm` (alloy) · `energetic` (nova) · `deep` (onyx) · `bright` (shimmer) · `gentle` (fable) · `dramatic` (echo) |
+| `--pacing` | `slow` · `normal` · `fast` |
+
+### Other flags
 
 ```bash
 # Cheap iteration: skip video gen, use Ken Burns zoom over still images
@@ -165,23 +191,25 @@ src/aivideo/
 ├── cache.py               # content-addressed disk cache for AI outputs
 ├── runs.py                # run-folder allocation + artifact paths
 ├── assets.py              # Token360 native Assets API (RealFace, Virtual Portrait)
+├── presets.py             # 10 styles + duration/aspect/mood/voice/pacing slugs
 │
 ├── agents/                # the "app" brain
 │   ├── schemas.py         # Plan, Keyframe, QCReport dataclasses
-│   ├── planner.py         # idea -> Plan
-│   ├── executor.py        # walks Plan, generates + QC + retry
+│   ├── planner.py         # idea -> Plan (honors presets)
+│   ├── executor.py        # walks Plan, generates + QC + retry, frame handoff
 │   └── qc.py              # multimodal artifact review
 │
 ├── generate/              # Token360 wrappers, each with disk caching
 │   ├── llm.py
 │   ├── image.py
 │   ├── tts.py
-│   └── video.py           # text/I2V/first-last/references/native
+│   └── video.py           # text / I2V / first-last / references / extend / chain / native
 │
 ├── compose/               # ffmpeg-based composition
 │   ├── stitch.py          # concat / audio overlay / fit-to-size
 │   ├── kenburns.py        # zoom-pan over a still image
 │   ├── subtitles.py       # Pillow-based burned subtitles
+│   ├── handoff.py         # extract last frame for cross-clip continuity
 │   └── render.py          # final h264 encode
 │
 ├── pipelines/
@@ -221,15 +249,61 @@ The planner outputs (and the executor consumes) this JSON:
       "image_prompt": "A small purple octopus inside a coral cave, peering out at...",
       "motion_prompt": "octopus drifts forward as camera slowly pulls back",
       "seconds": 5,
-      "transition_in": "cut"
+      "transition_in": "cut",
+      "role": "opening",
+      "continues_from_prev": false
+    },
+    {
+      "id": "k02",
+      "narration": "Past the kelp forest, the open ocean stretched endlessly.",
+      "image_prompt": "Wide expanse of teal ocean, sun beams cutting through water...",
+      "motion_prompt": "camera drifts forward through floating particles",
+      "seconds": 8,
+      "transition_in": "fade",
+      "role": "build",
+      "continues_from_prev": true
     }
   ]
 }
 ```
 
+`role` shapes narrative arc: `opening` (first scene) → one or more `build`
+scenes → optional `climax` → `resolution` (last scene). The planner is
+instructed to honor this structure.
+
+`continues_from_prev=true` tells the executor to skip image generation for
+that scene and instead use the **last frame of the previous scene's video
+clip** as the first frame for this one's I2V call. Two uses:
+
+1. **Long continuous shot** beyond the per-call cap: split a 24s shot into
+   three keyframes (8s each), set `continues_from_prev=true` on the second
+   and third — the result is one seamless 24-second camera move.
+2. **Smooth scene transitions** between conceptually different beats: visual
+   continuity instead of a hard cut.
+
 You can hand-edit `runs/<id>/plan.json` and then re-run the executor on it
 (forthcoming `aivideo replay <run_id>` — for now, copy the JSON into a
 script that calls `executor.execute()`).
+
+### Long shots: `chain_from_first_frame()`
+
+For pure code-driven chained generation (no planner), use:
+
+```python
+from aivideo.generate import video
+
+# 24-second seamless shot from a single starting image:
+mp4 = video.chain_from_first_frame(
+    image="opening.png",
+    motion_prompts=[
+        "camera drifts forward over coral reef, fish school passes",
+        "camera continues forward, kelp parts to reveal open ocean",
+        "camera lifts upward, sunlight breaks the surface",
+    ],
+    seconds_per_clip=8,
+)
+# -> single mp4, ~24 seconds total, last frame of clip N == first frame of clip N+1
+```
 
 ---
 

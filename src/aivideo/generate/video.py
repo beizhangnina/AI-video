@@ -5,7 +5,8 @@ Supports the Seedance video modes:
 - first-frame I2V      : from_first_frame(image_path, motion_prompt, ...)
 - first & last frame   : from_first_last(start, end, prompt, ...)
 - reference images     : from_references([...], prompt, ...)
-- extend / edit        : extend(video_path), edit(video_path)
+- extend video         : extend(video_path, prompt, ...)
+- chained long shot    : chain_from_first_frame(image, [prompt1, prompt2, ...])
 
 Token360 uses an async task model:
   POST /v1/videos -> task_id; poll GET /v1/videos/{id} until completed.
@@ -227,6 +228,114 @@ def from_references(
         cache_params={"refs": uris, "prompt": prompt, "duration": duration},
         callback_url=callback_url,
     )
+
+
+def extend(
+    video_path: str | Path,
+    prompt: str,
+    *,
+    model: str | None = None,
+    duration: int = 8,
+    callback_url: str | None = None,
+) -> Path:
+    """Continue an existing video for `duration` more seconds.
+
+    Maps to Token360's \"Extend video\" mode (Seedance 2.0 series). The provider
+    sees the existing clip's tail and synthesizes a continuation that flows
+    from the last frame, no manual frame-handoff needed.
+
+    Note: per-call duration cap still applies. For sequences longer than that
+    cap, prefer `chain_from_first_frame()` which handles the segmenting.
+    """
+    if duration not in ALLOWED_DURATIONS:
+        raise ValueError(f"duration must be in {sorted(ALLOWED_DURATIONS)}, got {duration}")
+    model = model or settings.video_model
+    src_uri = _ensure_asset_uri(video_path)
+    payload = {
+        "model": model,
+        "prompt": prompt,
+        "seconds": duration,
+        "mode": "extend",
+        "source_video": {"type": "video_url", "video_url": {"url": src_uri}},
+    }
+    return _submit_and_wait(
+        payload=payload,
+        cache_params={"extend": src_uri, "prompt": prompt, "duration": duration},
+        callback_url=callback_url,
+    )
+
+
+def chain_from_first_frame(
+    image: str | Path,
+    motion_prompts: list[str],
+    *,
+    seconds_per_clip: int = 8,
+    model: str | None = None,
+    portrait: str | None = None,
+) -> Path:
+    """Build a long continuous shot by chaining first-frame I2V calls.
+
+    Strategy:
+      clip_1 = video.from_first_frame(image,           motion_prompts[0])
+      clip_2 = video.from_first_frame(last(clip_1),    motion_prompts[1])
+      clip_3 = video.from_first_frame(last(clip_2),    motion_prompts[2])
+      ...
+    The clips share a true visual handoff (the last frame is literally the
+    next first frame), so concatenating them looks like one camera move.
+
+    Returns the path of a SINGLE concatenated mp4 of length
+    `seconds_per_clip * len(motion_prompts)`.
+
+    Use this when the desired shot exceeds the per-call max duration, or when
+    you want a guaranteed seamless transition between two beats.
+    """
+    if not motion_prompts:
+        raise ValueError("motion_prompts must contain at least one prompt")
+    if seconds_per_clip not in ALLOWED_DURATIONS:
+        raise ValueError(
+            f"seconds_per_clip must be in {sorted(ALLOWED_DURATIONS)}, got {seconds_per_clip}"
+        )
+
+    # Lazy imports to avoid pulling moviepy/handoff during simple text-only video calls.
+    from moviepy import concatenate_videoclips
+    from ..compose import handoff
+    from ..compose.stitch import load as load_clip
+
+    cache_params = {
+        "chain_image": str(image),
+        "prompts": motion_prompts,
+        "seconds_per_clip": seconds_per_clip,
+        "portrait": portrait,
+    }
+    final_path = cache_path("video", model or settings.video_model, cache_params, "mp4")
+    if hit(final_path):
+        return final_path
+
+    seed: str | Path = image
+    sub_clips: list[Path] = []
+    for i, mp in enumerate(motion_prompts):
+        clip_path = from_first_frame(
+            seed,
+            mp,
+            duration=seconds_per_clip,
+            model=model,
+            portrait=portrait,
+        )
+        sub_clips.append(clip_path)
+        if i < len(motion_prompts) - 1:
+            seed = handoff.last_frame(clip_path)
+
+    loaded = [load_clip(p) for p in sub_clips]
+    concatenated = concatenate_videoclips(loaded, method="compose")
+    concatenated.write_videofile(
+        str(final_path),
+        codec="libx264",
+        audio_codec="aac",
+        preset="medium",
+        threads=4,
+        logger=None,
+    )
+    return final_path
 
 
 def native(body: dict, *, callback_url: str | None = None) -> Path:

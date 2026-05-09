@@ -30,18 +30,46 @@ def _aspect_to_size(aspect: str) -> tuple[int, int]:
 def make(
     idea: str,
     *,
+    style: str | None = None,
+    duration: str | int | None = None,
+    aspect: str | None = None,
+    mood: str | None = None,
+    voice: str | None = None,
+    pacing: str | None = None,
     motion: str = "video_gen",
     qc_enabled: bool = True,
     portrait: str | None = None,
     llm_model: str | None = None,
 ) -> RunResult:
-    """Idea string -> finished mp4 + run folder. Returns a RunResult."""
+    """Idea string -> finished mp4 + run folder. Returns a RunResult.
+
+    Presets (any of these accept either a slug from aivideo.presets OR a raw
+    user-supplied descriptor):
+      style: cyberpunk | ghibli | pixar_3d | photorealistic | wuxia | cinematic |
+             anime | cartoon_2d | noir | watercolor
+      duration: snippet (15s) | short (30s) | standard (45s) | long_form (75s) |
+                a raw integer
+      aspect: vertical (9:16) | horizontal (16:9) | square (1:1)
+      mood: cheerful | melancholic | mysterious | epic | comedic | romantic |
+            suspenseful | serene
+      voice: warm | energetic | deep | bright | gentle | dramatic
+      pacing: slow | normal | fast
+    """
     run_dir = run_paths.new_run(idea)
     rid = run_paths.run_id(run_dir)
     print(f"[auto] run_id={rid}  ({run_dir})")
 
     print("[auto] planning…")
-    plan_obj: Plan = planner.plan(idea, llm_model=llm_model)
+    plan_obj: Plan = planner.plan(
+        idea,
+        llm_model=llm_model,
+        style=style,
+        duration=duration,
+        aspect=aspect,
+        mood=mood,
+        voice=voice,
+        pacing=pacing,
+    )
     plan_obj.write(run_paths.plan_path(run_dir))
     print(f"[auto] plan: {plan_obj.title} | {len(plan_obj.keyframes)} keyframes "
           f"| {plan_obj.style.duration_target}s | aspect={plan_obj.style.aspect}")
