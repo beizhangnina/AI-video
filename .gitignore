@@ -1,0 +1,28 @@
+# Secrets
+.env
+.env.local
+
+# Generated outputs
+output/
+cache/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+
+# Editor
+.vscode/
+.idea/
+*.swp
+.DS_Store
+
+# Test
+.pytest_cache/
+.ruff_cache/
