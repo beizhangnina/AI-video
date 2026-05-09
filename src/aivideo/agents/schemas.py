@@ -28,6 +28,9 @@ class Keyframe:
     motion_prompt: str               # how it should animate (subject + verb + camera)
     seconds: int                     # one of [3,4,5,6,7,8,9,10,12]
     transition_in: str = "cut"       # "cut" | "fade"
+    role: str = "build"              # "opening" | "build" | "climax" | "resolution"
+    continues_from_prev: bool = False  # True: skip image gen, use prev scene's last frame
+                                       # for seamless transition / chained long shots
 
 
 @dataclass
