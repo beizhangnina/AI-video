@@ -38,6 +38,7 @@ def execute(
     portrait: str | None = None,
     qc_enabled: bool = True,
     image_size: str = "1024x1792",
+    generate_audio: bool = False,
 ) -> tuple[list[QCReport], list[str]]:
     """Generate every keyframe's image and video into run_dir/scenes/.
 
@@ -50,10 +51,22 @@ def execute(
     prev_video_path: Path | None = None
 
     for kf in plan.keyframes:
-        kf_continues = kf.continues_from_prev and motion == "video_gen" and prev_video_path is not None
+        # Continuity flow when --portrait is given:
+        #   k01 → portrait IS the first frame.
+        #   k02+ → last frame of prev clip IS the first frame (true handoff).
+        # This produces a single flowing narrative instead of 5 portrait-resets.
+        portrait_first_frame = bool(portrait) and motion == "video_gen" and prev_video_path is None
+
+        kf_continues = (
+            motion == "video_gen"
+            and prev_video_path is not None
+            and (kf.continues_from_prev or bool(portrait))
+        )
         img_target = run_paths.scene_image(run_dir, kf.id)
 
-        if kf_continues:
+        if portrait_first_frame:
+            print(f"[executor] {kf.id}: portrait IS first frame (no image gen)")
+        elif kf_continues:
             print(f"[executor] {kf.id}: handoff from prev scene's last frame (no image gen)")
             handoff.last_frame(prev_video_path, img_target)
             # Skip image QC: the handoff frame is not from a prompt we control.
@@ -88,10 +101,11 @@ def execute(
 
         print(f"[executor] {kf.id}: video gen ({kf.seconds}s)…")
         vid_cache_path = video_gen.from_first_frame(
-            img_target,
+            None if portrait_first_frame else img_target,
             kf.motion_prompt,
             duration=kf.seconds,
-            portrait=portrait,
+            portrait=portrait if portrait_first_frame else None,
+            generate_audio=generate_audio,
         )
         vid_target = run_paths.scene_video(run_dir, kf.id)
         shutil.copyfile(vid_cache_path, vid_target)

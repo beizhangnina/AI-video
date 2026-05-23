@@ -36,6 +36,7 @@ def make(
     qc: bool = typer.Option(True, help="Enable quality control loop"),
     portrait: str = typer.Option(None, help="Local image path OR asset:// URI for character consistency"),
     llm_model: str = typer.Option(None, help="Override planner LLM"),
+    no_narration: bool = typer.Option(False, "--no-narration", help="Skip TTS narration + subtitles; use Seedance built-in ambient audio (generate_audio=true)"),
 ) -> None:
     """Turn a fuzzy idea into a finished mp4 under runs/<timestamp>-<slug>/."""
     from .pipelines.auto import make as run_auto
@@ -52,6 +53,7 @@ def make(
         qc_enabled=qc,
         portrait=portrait,
         llm_model=llm_model,
+        no_narration=no_narration,
     )
     typer.echo(f"\nFinal video: {result.final_video}")
     typer.echo(f"Run folder:  {result.run_dir}")

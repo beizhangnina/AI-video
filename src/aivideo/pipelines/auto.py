@@ -60,6 +60,7 @@ def make(
     qc_enabled: bool = True,
     portrait: str | None = None,
     llm_model: str | None = None,
+    no_narration: bool = False,
 ) -> RunResult:
     """Idea string -> finished mp4 + run folder. Returns a RunResult.
 
@@ -103,12 +104,14 @@ def make(
         motion=motion,
         portrait=resolved_portrait,
         qc_enabled=qc_enabled,
+        generate_audio=no_narration,
     )
 
-    print("[auto] generating narration audio…")
-    audio = tts.speak(plan_obj.narration, voice=plan_obj.style.voice)
-    narration_target = run_paths.narration_path(run_dir)
-    narration_target.write_bytes(audio.read_bytes())
+    if not no_narration:
+        print("[auto] generating narration audio…")
+        audio = tts.speak(plan_obj.narration, voice=plan_obj.style.voice)
+        narration_target = run_paths.narration_path(run_dir)
+        narration_target.write_bytes(audio.read_bytes())
 
     print("[auto] composing final video…")
     clips = []
@@ -125,8 +128,12 @@ def make(
         cursor += clip.duration
         clips.append(clip)
 
-    base = stitch.with_audio(stitch.concat(clips), narration_target)
-    final = subtitles.burn(base, cues)
+    if no_narration:
+        # Keep the per-clip ambient audio Seedance baked in; no subtitles.
+        final = stitch.concat(clips)
+    else:
+        base = stitch.with_audio(stitch.concat(clips), narration_target)
+        final = subtitles.burn(base, cues)
     final_path = run_paths.final_path(run_dir)
     render.to_mp4(final, final_path)
 
