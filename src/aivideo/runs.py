@@ -12,7 +12,7 @@ from pathlib import Path
 
 from .config import REPO_ROOT
 
-RUNS_DIR = REPO_ROOT / "runs"
+RUNS_DIR = REPO_ROOT / "output"
 RUNS_DIR.mkdir(exist_ok=True)
 
 
