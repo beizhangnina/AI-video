@@ -38,6 +38,30 @@ def _ensure_asset_uri(image_path_or_uri: str | Path) -> str:
     return assets.upload_and_wait(s)
 
 
+def _image_to_url(image_path_or_uri_or_url: str | Path) -> str:
+    """Resolve a local path / asset:// URI / http(s) URL to a Token360-accessible URL.
+
+    Token360's /v1/videos `reference_images` field accepts a list of URL strings.
+    For local paths we upload to the default asset group and read back the
+    asset's signed `url`. For asset:// URIs we just look up the URL. HTTP(S)
+    URLs are passed through.
+    """
+    s = str(image_path_or_uri_or_url)
+    if s.startswith(("http://", "https://")):
+        return s
+    if s.startswith("asset://"):
+        asset_id = s[len("asset://"):]
+    else:
+        asset_uri = assets.upload_and_wait(image_path_or_uri_or_url)
+        asset_id = asset_uri[len("asset://"):]
+    info = assets.get(asset_id)
+    data = info.get("data", info) if isinstance(info, dict) else {}
+    url = data.get("url") if isinstance(data, dict) else None
+    if not url:
+        raise RuntimeError(f"Asset {asset_id} has no signed url in metadata: {info}")
+    return url
+
+
 def _poll_task(task_id: str, timeout: float = 600.0, poll: float = 5.0) -> dict:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
@@ -93,7 +117,10 @@ def _submit_and_wait(
 
     # /v1/videos is Token360-specific; not part of OpenAI SDK surface.
     r = http_client().post("/videos", json=payload)
-    r.raise_for_status()
+    if r.status_code >= 400:
+        raise RuntimeError(
+            f"POST /videos {r.status_code} for payload keys={list(payload.keys())}: {r.text[:600]}"
+        )
     resp = r.json()
     task_id = resp.get("id") or resp.get("task_id") or resp.get("data", {}).get("id")
     if not task_id:
@@ -136,37 +163,65 @@ def from_text(
 
 
 def from_first_frame(
-    image: str | Path,
+    image: str | Path | None,
     motion_prompt: str,
     *,
     model: str | None = None,
     duration: int = 5,
     portrait: str | None = None,
+    generate_audio: bool = False,
     callback_url: str | None = None,
 ) -> Path:
-    """Animate a single image (first-frame I2V). Recommended for narrated_story.
+    """Animate a single image (first-frame I2V).
 
-    image: local path or asset:// URI for the starting frame.
-    portrait: optional asset:// URI of a Virtual Portrait / RealFace asset
-              for character consistency (Seedance 2.0 series only).
+    Two modes:
+      - portrait given: portrait IS the first frame. Uses Token360
+        frame_images[].first_frame with asset://ta_xxx. The `image` arg is
+        ignored (executor may pass None). Required for Virtual Portrait /
+        RealFace flows because Token360 rejects generic ua_xxx asset IDs
+        and signed URLs of real people in frame_images.
+      - no portrait: animate from `image` (local path or asset:// URI),
+        passed as a signed URL via reference_images (i2v_reference mode).
+
+    generate_audio: ask Seedance to synthesize an ambient/sfx audio track
+        matched to the scene. Speech/narration is NOT produced.
     """
     if duration not in ALLOWED_DURATIONS:
         raise ValueError(f"duration must be in {sorted(ALLOWED_DURATIONS)}, got {duration}")
+    if not portrait and image is None:
+        raise ValueError("from_first_frame needs either `image` or `portrait`")
     model = model or settings.video_model
-    first_uri = _ensure_asset_uri(image)
+
+    # Both portrait and image route to frame_images.first_frame (i2v_first_frame
+    # mode), which requires an asset://ta_xxx URI. portrait is already a ta_xxx
+    # (Virtual Portrait / RealFace). For a raw image, upload to the shared
+    # handoff VP group so we get a ta_xxx.
+    if portrait:
+        first_uri = portrait if portrait.startswith("asset://") else f"asset://{portrait}"
+        cache_first = first_uri
+    else:
+        s = str(image)
+        if s.startswith("asset://"):
+            first_uri = s
+        else:
+            first_uri = assets.upload_handoff(image)
+        cache_first = s
+
     payload: dict[str, Any] = {
         "model": model,
         "prompt": motion_prompt,
-        "seconds": duration,
-        "frame_images": [
-            {"type": "image_url", "frame_type": "first_frame", "image_url": {"url": first_uri}},
-        ],
+        "duration": duration,
+        "frame_images": [{
+            "type": "image_url",
+            "frame_type": "first_frame",
+            "image_url": {"url": first_uri},
+        }],
     }
-    if portrait:
-        payload["input_references"] = [{"type": "image_url", "image_url": {"url": portrait}}]
+    if generate_audio:
+        payload["generate_audio"] = True
     return _submit_and_wait(
         payload=payload,
-        cache_params={"first": first_uri, "prompt": motion_prompt, "duration": duration, "portrait": portrait},
+        cache_params={"first": cache_first, "prompt": motion_prompt, "duration": duration, "portrait": portrait, "audio": generate_audio},
         callback_url=callback_url,
     )
 

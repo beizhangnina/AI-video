@@ -17,6 +17,11 @@ from .client import http_client
 _DEFAULT_GROUP_NAME = "aivideo-default"
 _DEFAULT_GROUP_KIND = "GENERIC"
 
+# For first-frame handoff uploads we need ta_xxx asset IDs (frame_images requires
+# Virtual Portrait / RealFace assets; generic ua_xxx is rejected by Token360).
+_HANDOFF_GROUP_NAME = "aivideo-handoff-frames"
+_HANDOFF_GROUP_KIND = "VIRTUAL_PORTRAIT"
+
 
 def create_group(name: str, kind: str = "GENERIC") -> dict:
     """Create an asset group. kind: GENERIC | REAL_FACE | VIRTUAL_PORTRAIT.
@@ -37,7 +42,13 @@ def list_groups(kind: str | None = None) -> list[dict]:
     params = {"groupKind": kind} if kind else {}
     r = http_client().get("/asset-groups", params=params)
     r.raise_for_status()
-    return r.json().get("data", r.json() if isinstance(r.json(), list) else [])
+    body = r.json()
+    data = body.get("data", body)
+    if isinstance(data, dict):
+        return data.get("list") or data.get("items") or data.get("groups") or []
+    if isinstance(data, list):
+        return data
+    return []
 
 
 def upload(file_path: str | Path, group_id: str, display_name: str | None = None) -> str:
@@ -92,6 +103,28 @@ def upload_and_wait(file_path: str | Path, group_id: str | None = None) -> str:
     Returns 'asset://ta_xxx' ready to drop into a video generation request.
     """
     gid = group_id or ensure_default_group()
+    asset_id = upload(file_path, gid)
+    wait_active(asset_id)
+    return f"asset://{asset_id}"
+
+
+def ensure_handoff_group() -> str:
+    """Find or create the default VP group used for handoff-frame uploads.
+
+    Uses VIRTUAL_PORTRAIT so the resulting asset gets a ta_xxx ID accepted by
+    /v1/videos `frame_images`. (GENERIC groups produce ua_xxx which is rejected.)
+    """
+    for g in list_groups(kind=_HANDOFF_GROUP_KIND):
+        if g.get("name") == _HANDOFF_GROUP_NAME:
+            return g.get("assetGroupId") or g["id"]
+    created = create_group(_HANDOFF_GROUP_NAME, kind=_HANDOFF_GROUP_KIND)
+    data = created.get("data", created)
+    return data.get("assetGroupId") or data.get("id")
+
+
+def upload_handoff(file_path: str | Path) -> str:
+    """Upload a handoff frame to the shared VP group; returns 'asset://ta_xxx'."""
+    gid = ensure_handoff_group()
     asset_id = upload(file_path, gid)
     wait_active(asset_id)
     return f"asset://{asset_id}"
