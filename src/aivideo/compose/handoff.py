@@ -9,25 +9,32 @@ for either (a) faking a single long shot from multiple <=12s API calls, or
 
 from __future__ import annotations
 
+import subprocess
 from pathlib import Path
 
-from moviepy import VideoFileClip
-from PIL import Image
+
+def _ffmpeg(*args: str) -> None:
+    r = subprocess.run(
+        ["ffmpeg", "-v", "error", "-y", *args],
+        capture_output=True,
+        text=True,
+    )
+    if r.returncode != 0:
+        raise RuntimeError(f"ffmpeg failed (code {r.returncode}): {r.stderr.strip()}")
 
 
 def last_frame(video_path: str | Path, out_path: str | Path | None = None) -> Path:
     """Extract the final frame of a video as a PNG. Returns the PNG path.
 
-    If out_path is omitted, writes alongside the video as <stem>-last.png.
+    Uses ffmpeg `-sseof` to seek from the end. moviepy was unreliable here:
+    Seedance mp4s sometimes have a zero-byte padded final frame, and moviepy
+    silently falls back to an early frame instead of the real last one,
+    defeating the handoff chain entirely.
     """
     src = Path(video_path)
     out = Path(out_path) if out_path else src.with_name(f"{src.stem}-last.png")
     out.parent.mkdir(parents=True, exist_ok=True)
-    with VideoFileClip(str(src)) as clip:
-        # Sample 1/30s before the end to dodge any encoder-padded blank frame.
-        t = max(0.0, clip.duration - 1.0 / 30.0)
-        frame = clip.get_frame(t)
-    Image.fromarray(frame).save(out, format="PNG")
+    _ffmpeg("-sseof", "-0.1", "-i", str(src), "-update", "1", "-frames:v", "1", str(out))
     return out
 
 
@@ -36,7 +43,5 @@ def first_frame(video_path: str | Path, out_path: str | Path | None = None) -> P
     src = Path(video_path)
     out = Path(out_path) if out_path else src.with_name(f"{src.stem}-first.png")
     out.parent.mkdir(parents=True, exist_ok=True)
-    with VideoFileClip(str(src)) as clip:
-        frame = clip.get_frame(0.0)
-    Image.fromarray(frame).save(out, format="PNG")
+    _ffmpeg("-i", str(src), "-update", "1", "-frames:v", "1", str(out))
     return out
